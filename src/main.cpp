@@ -12,9 +12,11 @@ using SteadyClock = std::chrono::steady_clock;
 struct Options {
     std::string in_csv;
     double radius_m = 50.0;
-    std::string solver = "one_at_first";
+    std::string solver = "greedy1";
     std::size_t k = 5;
     std::uint64_t seed = 12345;
+    int max_aps = -1;
+    int timeout_ms = 5000;
 };
 
 static void print_usage(const char* argv0) {
@@ -50,12 +52,16 @@ static Options parse_args(int argc, char** argv) {
 
         if (a == "--radius") {
             opt.radius_m = std::stod(need("--radius"));
-        } else if (a == "--solver") {
-            opt.solver = need("--solver");
+        } else if (a == "--solver" || a == "--algorithm") {
+            opt.solver = need(a.c_str());
         } else if (a == "--k") {
             opt.k = static_cast<std::size_t>(std::stoull(need("--k")));
         } else if (a == "--seed") {
             opt.seed = static_cast<std::uint64_t>(std::stoull(need("--seed")));
+        } else if (a == "--max-aps") {
+            opt.max_aps = std::stoi(need("--max-aps"));
+        } else if (a == "--timeout-ms") {
+            opt.timeout_ms = std::stoi(need("--timeout-ms"));
         } else if (a == "-h" || a == "--help") {
             print_usage(argv[0]);
             std::exit(0);
@@ -69,56 +75,39 @@ static Options parse_args(int argc, char** argv) {
 }
 
 static Solution run_solver(const std::vector<DemandPoint>& pts, const Options& opt) {
-    if (opt.solver == "none") {
-        return solve_none(pts, opt.radius_m);
-    }
-    if (opt.solver == "one_at_first") {
-        return solve_one_at_first(pts, opt.radius_m);
-    }
-    if (opt.solver == "random_k") {
-        return solve_random_k(pts, opt.radius_m, opt.k, opt.seed);
-    }
+    if (opt.solver == "none")         return solve_none(pts, opt.radius_m);
+    if (opt.solver == "one_at_first") return solve_one_at_first(pts, opt.radius_m);
+    if (opt.solver == "random_k")     return solve_random_k(pts, opt.radius_m, opt.k, opt.seed);
+    if (opt.solver == "brute")        return solve_brute(pts, opt.radius_m, opt.timeout_ms, opt.max_aps);
+    if (opt.solver == "greedy1")      return solve_greedy1(pts, opt.radius_m, opt.max_aps);
+    if (opt.solver == "greedy2")      return solve_greedy2(pts, opt.radius_m, opt.max_aps);
+    if (opt.solver == "greedy3")      return solve_greedy3(pts, opt.radius_m, opt.max_aps);
     throw std::runtime_error("Unknown solver name: " + opt.solver);
 }
 
-static void report_solution(const std::vector<DemandPoint>& pts, const Solution& sol) {
-    std::cout << "Solver: " << sol.solver_name << "\n";
-    std::cout << "Points: " << pts.size() << "\n";
-    std::cout << "Radius: " << sol.radius_m << " m\n";
-    std::cout << "APs:    " << sol.aps.size() << "\n";
-    std::cout << std::fixed << std::setprecision(1)
-              << "Covered: " << sol.stats.covered_points << "/" << sol.stats.total_points
-              << " (" << sol.stats.coverage_percent << "%)\n";
-
-    std::cout << "\nAP locations (x_m, y_m):\n";
-    for (std::size_t i = 0; i < sol.aps.size(); i++) {
-        const auto& ap = sol.aps[i];
-        std::cout << "  " << (i+1) << ". "
-                  << ap.label << "  "
-                  << std::setprecision(2) << ap.x_m << ", " << ap.y_m << "\n";
-    }
+static void report_solution(const std::vector<DemandPoint>& pts, const Solution& sol, double solve_ms) {
+    std::cout << std::fixed << std::setprecision(1);
+    std::cout << "Points:    " << pts.size() << "\n";
+    std::cout << "Radius:    " << sol.radius_m << " m\n";
+    std::cout << "Algorithm: " << sol.solver_name << "\n";
+    std::cout << "APs placed: " << sol.aps.size() << "\n";
+    std::cout << "Coverage:  " << sol.stats.coverage_percent << "%"
+              << " (" << sol.stats.covered_points << "/" << sol.stats.total_points << ")\n";
+    std::cout << "Runtime:   " << std::setprecision(1) << solve_ms << " ms\n";
 }
 
 int main(int argc, char** argv) {
     try {
         Options opt = parse_args(argc, argv);
 
-        auto t0 = SteadyClock::now();
         const auto pts = load_demand_points_csv(opt.in_csv);
-        auto t1 = SteadyClock::now();
 
         auto t2 = SteadyClock::now();
         const auto sol = run_solver(pts, opt);
         auto t3 = SteadyClock::now();
-
-        const auto load_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
         const auto solve_ms = std::chrono::duration<double, std::milli>(t3 - t2).count();
 
-        std::cout << std::fixed << std::setprecision(3);
-        std::cout << "Load time:  " << load_ms << " ms\n";
-        std::cout << "Solve time: " << solve_ms << " ms\n\n";
-
-        report_solution(pts, sol);
+        report_solution(pts, sol, solve_ms);
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
